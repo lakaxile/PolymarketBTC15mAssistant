@@ -10,7 +10,10 @@ import {
   pickLatestLiveMarket,
   fetchClobPrice,
   fetchOrderBook,
-  summarizeOrderBook
+  summarizeOrderBook,
+  fetchPolymarketSnapshot,
+  parsePriceToBeat,
+  safeFileSlug
 } from "./data/polymarket.js";
 import { computeSessionVwap, computeVwapSeries } from "./indicators/vwap.js";
 import { computeRsi, sma, slopeLast } from "./indicators/rsi.js";
@@ -26,6 +29,13 @@ import path from "node:path";
 import readline from "node:readline";
 import { applyGlobalProxyFromEnv } from "./net/proxy.js";
 
+/**
+ * 计算收盘价与 VWAP 的穿插次数
+ * @param {number[]} closes 收盘价序列
+ * @param {number[]} vwapSeries VWAP 序列
+ * @param {number} lookback 回溯期
+ */
+
 function countVwapCrosses(closes, vwapSeries, lookback) {
   if (closes.length < lookback || vwapSeries.length < lookback) return null;
   let crosses = 0;
@@ -38,8 +48,12 @@ function countVwapCrosses(closes, vwapSeries, lookback) {
   return crosses;
 }
 
+// 应用环境变量中的代理设置
 applyGlobalProxyFromEnv();
 
+/**
+ * 格式化剩余时间为 MM:SS
+ */
 function fmtTimeLeft(mins) {
   const totalSeconds = Math.max(0, Math.floor(mins * 60));
   const m = Math.floor(totalSeconds / 60);
@@ -47,6 +61,7 @@ function fmtTimeLeft(mins) {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+// ANSI 终端颜色代码
 const ANSI = {
   reset: "\x1b[0m",
   red: "\x1b[31m",
@@ -58,16 +73,25 @@ const ANSI = {
   dim: "\x1b[2m"
 };
 
+/**
+ * 获取终端屏幕宽度
+ */
 function screenWidth() {
   const w = Number(process.stdout?.columns);
   return Number.isFinite(w) && w >= 40 ? w : 80;
 }
 
+/**
+ * 生成分隔线
+ */
 function sepLine(ch = "─") {
   const w = screenWidth();
   return `${ANSI.white}${ch.repeat(w)}${ANSI.reset}`;
 }
 
+/**
+ * 渲染屏幕内容（通过将光标移至顶部并清除下方内容）
+ */
 function renderScreen(text) {
   try {
     readline.cursorTo(process.stdout, 0, 0);
@@ -78,16 +102,25 @@ function renderScreen(text) {
   process.stdout.write(text);
 }
 
+/**
+ * 移除字符串中的 ANSI 颜色代码以便计算可见长度
+ */
 function stripAnsi(s) {
   return String(s).replace(/\x1b\[[0-9;]*m/g, "");
 }
 
+/**
+ * 填充标签到指定宽度
+ */
 function padLabel(label, width) {
   const visible = stripAnsi(label).length;
   if (visible >= width) return label;
   return label + " ".repeat(width - visible);
 }
 
+/**
+ * 将文本居中显示
+ */
 function centerText(text, width) {
   const visible = stripAnsi(text).length;
   if (visible >= width) return text;
@@ -97,15 +130,24 @@ function centerText(text, width) {
 }
 
 const LABEL_W = 16;
+/**
+ * 格式化键值对行
+ */
 function kv(label, value) {
   const l = padLabel(String(label), LABEL_W);
   return `${l}${value}`;
 }
 
+/**
+ * 格式化章节标题
+ */
 function section(title) {
   return `${ANSI.white}${title}${ANSI.reset}`;
 }
 
+/**
+ * 带有颜色和趋势箭头的价格显示
+ */
 function colorPriceLine({ label, price, prevPrice, decimals = 0, prefix = "" }) {
   if (price === null || price === undefined) {
     return `${label}: ${ANSI.gray}-${ANSI.reset}`;
@@ -130,6 +172,9 @@ function colorPriceLine({ label, price, prevPrice, decimals = 0, prefix = "" }) 
   return `${label}: ${color}${formatted}${arrow}${ANSI.reset}`;
 }
 
+/**
+ * 格式化带有正负号和百分比的价格变动
+ */
 function formatSignedDelta(delta, base) {
   if (delta === null || base === null || base === 0) return `${ANSI.gray}-${ANSI.reset}`;
   const sign = delta > 0 ? "+" : delta < 0 ? "-" : "";
@@ -137,6 +182,9 @@ function formatSignedDelta(delta, base) {
   return `${sign}$${Math.abs(delta).toFixed(2)}, ${sign}${pct.toFixed(2)}%`;
 }
 
+/**
+ * 根据叙事（LONG/SHORT）着色文本
+ */
 function colorByNarrative(text, narrative) {
   if (narrative === "LONG") return `${ANSI.green}${text}${ANSI.reset}`;
   if (narrative === "SHORT") return `${ANSI.red}${text}${ANSI.reset}`;
@@ -184,6 +232,9 @@ function fmtEtTime(now = new Date()) {
   }
 }
 
+/**
+ * 获取当前的 BTC 交易时段（亚洲、欧洲、美国等）
+ */
 function getBtcSession(now = new Date()) {
   const h = now.getUTCHours();
   const inAsia = h >= 0 && h < 8;
@@ -198,204 +249,12 @@ function getBtcSession(now = new Date()) {
   return "Off-hours";
 }
 
-function parsePriceToBeat(market) {
-  const text = String(market?.question ?? market?.title ?? "");
-  if (!text) return null;
-  const m = text.match(/price\s*to\s*beat[^\d$]*\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)/i);
-  if (!m) return null;
-  const raw = m[1].replace(/,/g, "");
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : null;
-}
 
-const dumpedMarkets = new Set();
-
-function safeFileSlug(x) {
-  return String(x ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/(^-|-$)/g, "")
-    .slice(0, 120);
-}
-
-function extractNumericFromMarket(market) {
-  const directKeys = [
-    "priceToBeat",
-    "price_to_beat",
-    "strikePrice",
-    "strike_price",
-    "strike",
-    "threshold",
-    "thresholdPrice",
-    "threshold_price",
-    "targetPrice",
-    "target_price",
-    "referencePrice",
-    "reference_price"
-  ];
-
-  for (const k of directKeys) {
-    const v = market?.[k];
-    const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
-    if (Number.isFinite(n)) return n;
-  }
-
-  const seen = new Set();
-  const stack = [{ obj: market, depth: 0 }];
-
-  while (stack.length) {
-    const { obj, depth } = stack.pop();
-    if (!obj || typeof obj !== "object") continue;
-    if (seen.has(obj) || depth > 6) continue;
-    seen.add(obj);
-
-    const entries = Array.isArray(obj) ? obj.entries() : Object.entries(obj);
-    for (const [key, value] of entries) {
-      const k = String(key).toLowerCase();
-      if (value && typeof value === "object") {
-        stack.push({ obj: value, depth: depth + 1 });
-        continue;
-      }
-
-      if (!/(price|strike|threshold|target|beat)/i.test(k)) continue;
-
-      const n = typeof value === "string" ? Number(value) : typeof value === "number" ? value : NaN;
-      if (!Number.isFinite(n)) continue;
-
-      if (n > 1000 && n < 2_000_000) return n;
-    }
-  }
-
-  return null;
-}
-
-function priceToBeatFromPolymarketMarket(market) {
-  const n = extractNumericFromMarket(market);
-  if (n !== null) return n;
-  return parsePriceToBeat(market);
-}
-
-const marketCache = {
-  market: null,
-  fetchedAtMs: 0
-};
-
-async function resolveCurrentBtc15mMarket() {
-  if (CONFIG.polymarket.marketSlug) {
-    return await fetchMarketBySlug(CONFIG.polymarket.marketSlug);
-  }
-
-  if (!CONFIG.polymarket.autoSelectLatest) return null;
-
-  const now = Date.now();
-  if (marketCache.market && now - marketCache.fetchedAtMs < CONFIG.pollIntervalMs) {
-    return marketCache.market;
-  }
-
-  const events = await fetchLiveEventsBySeriesId({ seriesId: CONFIG.polymarket.seriesId, limit: 25 });
-  const markets = flattenEventMarkets(events);
-  const picked = pickLatestLiveMarket(markets);
-
-  marketCache.market = picked;
-  marketCache.fetchedAtMs = now;
-  return picked;
-}
-
-async function fetchPolymarketSnapshot() {
-  const market = await resolveCurrentBtc15mMarket();
-
-  if (!market) return { ok: false, reason: "market_not_found" };
-
-  const outcomes = Array.isArray(market.outcomes) ? market.outcomes : (typeof market.outcomes === "string" ? JSON.parse(market.outcomes) : []);
-  const outcomePrices = Array.isArray(market.outcomePrices)
-    ? market.outcomePrices
-    : (typeof market.outcomePrices === "string" ? JSON.parse(market.outcomePrices) : []);
-
-  const clobTokenIds = Array.isArray(market.clobTokenIds)
-    ? market.clobTokenIds
-    : (typeof market.clobTokenIds === "string" ? JSON.parse(market.clobTokenIds) : []);
-
-  let upTokenId = null;
-  let downTokenId = null;
-  for (let i = 0; i < outcomes.length; i += 1) {
-    const label = String(outcomes[i]);
-    const tokenId = clobTokenIds[i] ? String(clobTokenIds[i]) : null;
-    if (!tokenId) continue;
-
-    if (label.toLowerCase() === CONFIG.polymarket.upOutcomeLabel.toLowerCase()) upTokenId = tokenId;
-    if (label.toLowerCase() === CONFIG.polymarket.downOutcomeLabel.toLowerCase()) downTokenId = tokenId;
-  }
-
-  const upIndex = outcomes.findIndex((x) => String(x).toLowerCase() === CONFIG.polymarket.upOutcomeLabel.toLowerCase());
-  const downIndex = outcomes.findIndex((x) => String(x).toLowerCase() === CONFIG.polymarket.downOutcomeLabel.toLowerCase());
-
-  const gammaYes = upIndex >= 0 ? Number(outcomePrices[upIndex]) : null;
-  const gammaNo = downIndex >= 0 ? Number(outcomePrices[downIndex]) : null;
-
-  if (!upTokenId || !downTokenId) {
-    return {
-      ok: false,
-      reason: "missing_token_ids",
-      market,
-      outcomes,
-      clobTokenIds,
-      outcomePrices
-    };
-  }
-
-  let upBuy = null;
-  let downBuy = null;
-  let upBookSummary = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: null, askLiquidity: null };
-  let downBookSummary = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: null, askLiquidity: null };
-
-  try {
-    const [yesBuy, noBuy, upBook, downBook] = await Promise.all([
-      fetchClobPrice({ tokenId: upTokenId, side: "buy" }),
-      fetchClobPrice({ tokenId: downTokenId, side: "buy" }),
-      fetchOrderBook({ tokenId: upTokenId }),
-      fetchOrderBook({ tokenId: downTokenId })
-    ]);
-
-    upBuy = yesBuy;
-    downBuy = noBuy;
-    upBookSummary = summarizeOrderBook(upBook);
-    downBookSummary = summarizeOrderBook(downBook);
-  } catch {
-    upBuy = null;
-    downBuy = null;
-    upBookSummary = {
-      bestBid: Number(market.bestBid) || null,
-      bestAsk: Number(market.bestAsk) || null,
-      spread: Number(market.spread) || null,
-      bidLiquidity: null,
-      askLiquidity: null
-    };
-    downBookSummary = {
-      bestBid: null,
-      bestAsk: null,
-      spread: Number(market.spread) || null,
-      bidLiquidity: null,
-      askLiquidity: null
-    };
-  }
-
-  return {
-    ok: true,
-    market,
-    tokens: { upTokenId, downTokenId },
-    prices: {
-      up: upBuy ?? gammaYes,
-      down: downBuy ?? gammaNo
-    },
-    orderbook: {
-      up: upBookSummary,
-      down: downBookSummary
-    }
-  };
-}
-
+/**
+ * 主执行循环
+ */
 async function main() {
+  // 启动各个数据流
   const binanceStream = startBinanceTradeStream({ symbol: CONFIG.symbol });
   const polymarketLiveStream = startPolymarketChainlinkPriceStream({});
   const chainlinkStream = startChainlinkPriceStream({});
@@ -404,6 +263,7 @@ async function main() {
   let prevCurrentPrice = null;
   let priceToBeatState = { slug: null, value: null, setAtMs: null };
 
+  // CSV 日志表头
   const header = [
     "timestamp",
     "entry_minute",
@@ -422,6 +282,7 @@ async function main() {
   while (true) {
     const timing = getCandleWindowTiming(CONFIG.candleWindowMinutes);
 
+    // 获取各个流的最新快照
     const wsTick = binanceStream.getLast();
     const wsPrice = wsTick?.price ?? null;
 
@@ -432,6 +293,7 @@ async function main() {
     const chainlinkWsPrice = chainlinkWsTick?.price ?? null;
 
     try {
+      // 优先从 WS 获取价格，否则从 REST API 获取
       const chainlinkPromise = polymarketWsPrice !== null
         ? Promise.resolve({ price: polymarketWsPrice, updatedAt: polymarketWsTick?.updatedAt ?? null, source: "polymarket_ws" })
         : chainlinkWsPrice !== null
@@ -449,11 +311,13 @@ async function main() {
       const settlementMs = poly.ok && poly.market?.endDate ? new Date(poly.market.endDate).getTime() : null;
       const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
 
+      // 剩余时间：优先使用市场结算时间，否则使用 K 线窗口时间
       const timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
 
       const candles = klines1m;
       const closes = candles.map((c) => c.close);
 
+      // 计算 VWAP 指标
       const vwap = computeSessionVwap(candles);
       const vwapSeries = computeVwapSeries(candles);
       const vwapNow = vwapSeries[vwapSeries.length - 1];
@@ -462,6 +326,7 @@ async function main() {
       const vwapSlope = vwapSeries.length >= lookback ? (vwapNow - vwapSeries[vwapSeries.length - lookback]) / lookback : null;
       const vwapDist = vwapNow ? (lastPrice - vwapNow) / vwapNow : null;
 
+      // 计算 RSI 指标
       const rsiNow = computeRsi(closes, CONFIG.rsiPeriod);
       const rsiSeries = [];
       for (let i = 0; i < closes.length; i += 1) {
@@ -472,8 +337,10 @@ async function main() {
       const rsiMa = sma(rsiSeries, CONFIG.rsiMaPeriod);
       const rsiSlope = slopeLast(rsiSeries, 3);
 
+      // 计算 MACD 指标
       const macd = computeMacd(closes, CONFIG.macdFast, CONFIG.macdSlow, CONFIG.macdSignal);
 
+      // 计算 Heikin Ashi
       const ha = computeHeikenAshi(candles);
       const consec = countConsecutive(ha);
 
@@ -485,6 +352,7 @@ async function main() {
         ? closes[closes.length - 1] < vwapNow && closes[closes.length - 2] > vwapSeries[vwapSeries.length - 2]
         : false;
 
+      // 评估市场环境
       const regimeInfo = detectRegime({
         price: lastPrice,
         vwap: vwapNow,
@@ -494,6 +362,7 @@ async function main() {
         volumeAvg
       });
 
+      // 评估上涨/下跌概率
       const scored = scoreDirection({
         price: lastPrice,
         vwap: vwapNow,
@@ -506,12 +375,15 @@ async function main() {
         failedVwapReclaim
       });
 
+      // 应用时间衰减
       const timeAware = applyTimeAwareness(scored.rawUp, timeLeftMin, CONFIG.candleWindowMinutes);
 
       const marketUp = poly.ok ? poly.prices.up : null;
       const marketDown = poly.ok ? poly.prices.down : null;
+      // 计算对比市场的优势 (Edge)
       const edge = computeEdge({ modelUp: timeAware.adjustedUp, modelDown: timeAware.adjustedDown, marketYes: marketUp, marketNo: marketDown });
 
+      // 做出交易决策
       const rec = decide({ remainingMinutes: timeLeftMin, edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, modelUp: timeAware.adjustedUp, modelDown: timeAware.adjustedDown });
 
       const vwapSlopeLabel = vwapSlope === null ? "-" : vwapSlope > 0 ? "UP" : vwapSlope < 0 ? "DOWN" : "FLAT";
@@ -582,10 +454,12 @@ async function main() {
       const marketSlug = poly.ok ? String(poly.market?.slug ?? "") : "";
       const marketStartMs = poly.ok && poly.market?.eventStartTime ? new Date(poly.market.eventStartTime).getTime() : null;
 
+      // 如果切换了市场，重置待击败价格
       if (marketSlug && priceToBeatState.slug !== marketSlug) {
         priceToBeatState = { slug: marketSlug, value: null, setAtMs: null };
       }
 
+      // 在市场开始时锁定“待击败价格”
       if (priceToBeatState.slug && priceToBeatState.value === null && currentPrice !== null) {
         const nowMs = Date.now();
         const okToLatch = marketStartMs === null ? true : nowMs >= marketStartMs;
@@ -619,6 +493,7 @@ async function main() {
       const currentPriceValue = currentPriceBaseLine.split(": ")[1] ?? currentPriceBaseLine;
       const currentPriceLine = kv("CURRENT PRICE:", `${currentPriceValue} (${ptbDeltaText})`);
 
+      // 如果是新市场，将其 JSON 数据保存到本地日志
       if (poly.ok && poly.market && priceToBeatState.value === null) {
         const slug = safeFileSlug(poly.market.slug || poly.market.id || "market");
         if (slug && !dumpedMarkets.has(slug)) {
@@ -706,6 +581,7 @@ async function main() {
       prevSpotPrice = spotPrice ?? prevSpotPrice;
       prevCurrentPrice = currentPrice ?? prevCurrentPrice;
 
+      // 追加记录到 CSV 文件
       appendCsvRow("./logs/signals.csv", header, [
         new Date().toISOString(),
         timing.elapsedMinutes.toFixed(3),
@@ -726,8 +602,9 @@ async function main() {
       console.log("────────────────────────────");
     }
 
+    // 等待下一次轮询
     await sleep(CONFIG.pollIntervalMs);
   }
 }
 
-main();
+main(); // 执行程序

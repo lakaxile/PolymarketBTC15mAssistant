@@ -1,8 +1,42 @@
+# Dependencies
 node_modules/
-logs/
+
+# Environment
 .env
 .env.*
+.env.local
+
+# Logs
+logs/
+*.log
+test_out.log
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Debug logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Reports (optional - uncomment if you don't want reports in git)
+# reports/
+
+# Build output
+dist/
+build/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Data dumps
+next_data_dump.json
+clob_history.txt
+
+# Test files
+test_*.js
+debug_*.js

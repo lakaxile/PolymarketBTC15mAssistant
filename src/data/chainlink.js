@@ -1,6 +1,9 @@
 import { ethers } from "ethers";
 import { CONFIG } from "../config.js";
 
+/**
+ * Chainlink 聚合器 ABI，仅包含我们需要的方法
+ */
 const AGGREGATOR_ABI = [
   "function latestRoundData() view returns (uint80 roundId,int256 answer,uint256 startedAt,uint256 updatedAt,uint80 answeredInRound)",
   "function decimals() view returns (uint8)"
@@ -8,14 +11,17 @@ const AGGREGATOR_ABI = [
 
 const iface = new ethers.Interface(AGGREGATOR_ABI);
 
-let preferredRpcUrl = null;
+let preferredRpcUrl = null; // 优先使用的 RPC URL
 
-let cachedDecimals = null;
-let cachedResult = { price: null, updatedAt: null, source: "chainlink" };
-let cachedFetchedAtMs = 0;
-const MIN_FETCH_INTERVAL_MS = 2_000;
-const RPC_TIMEOUT_MS = 1_500;
+let cachedDecimals = null; // 缓存的小数位数
+let cachedResult = { price: null, updatedAt: null, source: "chainlink" }; // 缓存的最新价格结果
+let cachedFetchedAtMs = 0; // 上次获取数据的时间戳（毫秒）
+const MIN_FETCH_INTERVAL_MS = 2_000; // 最小获取间隔（2秒）
+const RPC_TIMEOUT_MS = 5_000; // RPC 请求超时时间（5秒）
 
+/**
+ * 获取可用的 RPC 候选列表
+ */
 function getRpcCandidates() {
   const fromList = Array.isArray(CONFIG.chainlink.polygonRpcUrls) ? CONFIG.chainlink.polygonRpcUrls : [];
   const single = CONFIG.chainlink.polygonRpcUrl ? [CONFIG.chainlink.polygonRpcUrl] : [];
@@ -29,6 +35,9 @@ function getRpcCandidates() {
   return Array.from(new Set(all));
 }
 
+/**
+ * 获取排序后的 RPC 列表，将优先的放在首位
+ */
 function getOrderedRpcs() {
   const rpcs = getRpcCandidates();
   const pref = preferredRpcUrl;
@@ -38,6 +47,9 @@ function getOrderedRpcs() {
   return rpcs;
 }
 
+/**
+ * 执行 JSON-RPC 请求
+ */
 async function jsonRpcRequest(rpcUrl, method, params) {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
@@ -64,10 +76,16 @@ async function jsonRpcRequest(rpcUrl, method, params) {
   }
 }
 
+/**
+ * 执行 eth_call
+ */
 async function ethCall(rpcUrl, to, data) {
   return await jsonRpcRequest(rpcUrl, "eth_call", [{ to, data }, "latest"]);
 }
 
+/**
+ * 获取聚合器的小数位数
+ */
 async function fetchDecimals(rpcUrl, aggregator) {
   const data = iface.encodeFunctionData("decimals", []);
   const result = await ethCall(rpcUrl, aggregator, data);
@@ -75,6 +93,9 @@ async function fetchDecimals(rpcUrl, aggregator) {
   return Number(dec);
 }
 
+/**
+ * 获取最新的回合数据（包含价格和更新时间）
+ */
 async function fetchLatestRoundData(rpcUrl, aggregator) {
   const data = iface.encodeFunctionData("latestRoundData", []);
   const result = await ethCall(rpcUrl, aggregator, data);
@@ -85,12 +106,16 @@ async function fetchLatestRoundData(rpcUrl, aggregator) {
   };
 }
 
+/**
+ * 获取 Chainlink BTC/USD 价格
+ */
 export async function fetchChainlinkBtcUsd() {
   if ((!CONFIG.chainlink.polygonRpcUrl && (!CONFIG.chainlink.polygonRpcUrls || CONFIG.chainlink.polygonRpcUrls.length === 0)) || !CONFIG.chainlink.btcUsdAggregator) {
     return { price: null, updatedAt: null, source: "missing_config" };
   }
 
   const now = Date.now();
+  // 检查缓存
   if (cachedFetchedAtMs && now - cachedFetchedAtMs < MIN_FETCH_INTERVAL_MS) {
     return cachedResult;
   }
@@ -100,6 +125,7 @@ export async function fetchChainlinkBtcUsd() {
 
   const aggregator = CONFIG.chainlink.btcUsdAggregator;
 
+  // 遍历 RPC 进行重试
   for (const rpc of rpcs) {
     preferredRpcUrl = rpc;
     try {
@@ -128,3 +154,4 @@ export async function fetchChainlinkBtcUsd() {
 
   return cachedResult;
 }
+

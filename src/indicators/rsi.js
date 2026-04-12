@@ -1,5 +1,10 @@
 import { clamp } from "../utils.js";
 
+/**
+ * 计算 RSI（相对强弱指数）
+ * @param {number[]} closes 收盘价数组
+ * @param {number} period 周期
+ */
 export function computeRsi(closes, period) {
   if (!Array.isArray(closes) || closes.length < period + 1) return null;
 
@@ -21,6 +26,11 @@ export function computeRsi(closes, period) {
   return clamp(rsi, 0, 100);
 }
 
+/**
+ * 计算 SMA（简单移动平均线）
+ * @param {number[]} values 数值数组
+ * @param {number} period 周期
+ */
 export function sma(values, period) {
   if (!Array.isArray(values) || values.length < period) return null;
   const slice = values.slice(values.length - period);
@@ -28,6 +38,11 @@ export function sma(values, period) {
   return sum / period;
 }
 
+/**
+ * 计算最后 N 个点的斜率
+ * @param {number[]} values 数值数组
+ * @param {number} points 点数
+ */
 export function slopeLast(values, points) {
   if (!Array.isArray(values) || values.length < points) return null;
   const slice = values.slice(values.length - points);
@@ -35,3 +50,4 @@ export function slopeLast(values, points) {
   const last = slice[slice.length - 1];
   return (last - first) / (points - 1);
 }
+
