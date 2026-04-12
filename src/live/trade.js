@@ -221,6 +221,27 @@ export async function runLiveTrading() {
     console.log(`[BOOT] Verifying USDC Balance...`);
     await pm.fetchUsdcBalance();
 
+    // --- Polymarket CLOB 服务器延迟测量 ---
+    let serverLatencyMs = null;
+    let lastLatencyCheck = 0;
+    const measureLatency = async () => {
+        const start = Date.now();
+        try {
+            const res = await fetch("https://clob.polymarket.com/markets?limit=1", { 
+                method: "GET",
+                headers: { "Content-Type": "application/json" }
+            });
+            serverLatencyMs = Date.now() - start;
+            lastLatencyCheck = Date.now();
+        } catch (e) {
+            serverLatencyMs = null;
+        }
+    };
+    // 初始测量
+    measureLatency();
+    // 每 30 秒测量一次延迟
+    setInterval(measureLatency, 30000);
+
     console.log(`[BOOT] Entering Fast Action Loop (200ms)...`);
     let loopCount = 0;
     let lastRenderTime = 0;
@@ -792,6 +813,8 @@ export async function runLiveTrading() {
                     // loop
                     loopCount,
                     isWaiting: loopCount <= 25,
+                    // server latency
+                    serverLatency: serverLatencyMs,
                 });
                 lastRenderTime = now2;
             }

@@ -145,6 +145,7 @@ export function renderDashboard(ctx) {
         `${gray("Cross Count")}  ${crossCount > 4 ? red(String(crossCount)+"⚡") : yellow(String(crossCount))}`,
         `${gray("CVD (1m/5m)")}  ${signedColor(cvd1m)} / ${signedColor(cvd5m)}`,
         `${gray("Status")}       ${isWaiting ? yellow("WAIT") : green("ACTIVE")}`,
+        `${gray("Latency")}     ${ctx.serverLatency ? (ctx.serverLatency < 100 ? green(ctx.serverLatency + "ms") : ctx.serverLatency < 200 ? yellow(ctx.serverLatency + "ms") : red(ctx.serverLatency + "ms")) : gray("-")}`,
     ];
 
         const sumCvd = ((ruleScores.find(r=>r.rule==="R1_CVD1m")?.contribution||0) * 1) + ((ruleScores.find(r=>r.rule==="R2_CVD5m")?.contribution||0) * 1);
