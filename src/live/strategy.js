@@ -108,7 +108,7 @@ export function myCustomStrategy(indicators, marketPrices, context) {
 
     if (defense.blocked) {
         if (defense.reason !== lastBlockedReason) {
-            logAction(`[DEFENSE VETO] Trade Blocked: ${defense.reason}`, "warn");
+            logAction(`[DEFENSE VETO] ${defense.reason}`, "warn", { oneTime: true, key: `defense_${defense.reason}` });
             lastBlockedReason = defense.reason;
         }
         return { blocked: true, reason: defense.reason, signal, defenseMultiplier: defense.multiplier };

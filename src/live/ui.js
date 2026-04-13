@@ -23,8 +23,14 @@ const C = {
 };
 
 export const executionLogs = [];
-export function logAction(msg, level = "info") {
+const oneTimeLogs = new Set(); // 跟踪只显示一次的日志
+const recentOneTimeLogs = [];  // 最近显示的单次日志（用于追踪）
+
+export function logAction(msg, level = "info", options = {}) {
     // level: "info" | "success" | "warm" | "error"
+    // options.oneTime: true 表示只显示一次就删除
+    // options.key: 用于识别同类型消息，避免重复显示
+    
     const t = new Date().toLocaleTimeString();
     let prefix = gray(`[${t}]`);
     let colorMsg = msg;
@@ -32,7 +38,32 @@ export function logAction(msg, level = "info") {
     else if (level === "warn") colorMsg = yellow(msg);
     else if (level === "error") colorMsg = red(msg);
     
-    executionLogs.push(`${prefix} ${colorMsg}`);
+    const fullMsg = `${prefix} ${colorMsg}`;
+    
+    // 处理单次显示的消息
+    if (options.oneTime) {
+        const key = options.key || msg;
+        // 如果这个 key 已经在最近显示过，跳过
+        if (recentOneTimeLogs.includes(key)) {
+            return;
+        }
+        // 标记为已显示
+        recentOneTimeLogs.push(key);
+        executionLogs.push(fullMsg);
+        // 立即删除（下一帧会被清理）
+        setTimeout(() => {
+            const idx = executionLogs.indexOf(fullMsg);
+            if (idx !== -1) executionLogs.splice(idx, 1);
+            const keyIdx = recentOneTimeLogs.indexOf(key);
+            if (keyIdx !== -1) recentOneTimeLogs.splice(keyIdx, 1);
+        }, 100);
+        // 确保总量不超标
+        if (executionLogs.length > 25) executionLogs.shift();
+        return;
+    }
+    
+    // 正常日志
+    executionLogs.push(fullMsg);
     if (executionLogs.length > 25) {
         executionLogs.shift();
     }

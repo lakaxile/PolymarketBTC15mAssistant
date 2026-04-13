@@ -3,13 +3,19 @@ import { LIVE_CONFIG } from "./config.js";
 import { sendTelegramMessage } from "../utils/telegram.js";
 import { logAction } from "./ui.js";
 
-function execLog(msg, level="info") {
+function execLog(msg, level="info", options = {}) {
     let cleanMsg = msg.replace("[EXEC] ", "");
     if (cleanMsg.includes("✅") || cleanMsg.includes("🟢") || cleanMsg.includes("SUCCESS")) level = "success";
     else if (cleanMsg.includes("🔴") || cleanMsg.includes(" Failed")) level = "error";
     else if (cleanMsg.includes("⛔") || cleanMsg.includes("⚠️") || cleanMsg.includes("Skip") || cleanMsg.includes("🟡")) level = "warn";
     
-    logAction(cleanMsg, level);
+    // 失败消息只显示一次
+    if (level === "error" && !options.oneTimeForced) {
+        options.oneTime = true;
+        options.key = `exec_fail_${cleanMsg.substring(0, 50)}`;
+    }
+    
+    logAction(cleanMsg, level, options);
 }
 
 /**
