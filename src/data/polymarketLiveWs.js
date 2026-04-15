@@ -154,7 +154,11 @@ export function startPolymarketChainlinkPriceStream({
     });
 
     ws.on("close", scheduleReconnect);
-    ws.on("error", scheduleReconnect);
+    ws.on("error", (err) => {
+      // 吞掉 WebSocket 错误，防止进程崩溃
+      console.warn(`[DATA] Poly Live WS error (reconnecting...): ${err.message}`);
+      scheduleReconnect();
+    });
   };
 
   connect();
