@@ -50,8 +50,9 @@ export const LIVE_CONFIG = {
     arbiTargetCents: 0.12, // 目标绝对分价差 (+12分成本)，可单独调整
 
     // 安全开关: 干跑模式 (Dry Run)
-    // 如果为 true，程序在抵达真正向 CLOB 发送签名请求前的一秒会自动中止，只在控制台输出“假装下单”的字样。
-    isDryRun: true,
+    // 如果为 true，程序在抵达真正向 CLOB 发送签名请求前的一秒会自动中止，只在控制台输出"假装下单"的字样。
+    // 设置为 false 接入实盘交易
+    isDryRun: false,
 
     // Telegram 通知配置
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "",
