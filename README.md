@@ -93,6 +93,21 @@ You can set them in your shell, or create a `.env` file and load it using your p
   - If set, the assistant will target a specific market slug.
 - `POLYMARKET_LIVE_WS_URL` (default: `wss://ws-live-data.polymarket.com`)
 
+### Polymarket Trading API (for live trading)
+
+Required for live trading mode (`isDryRun: false`):
+
+```
+# Polymarket API Credentials
+POLY_WALLET_KEY=your_wallet_private_key
+POLY_PROXY_ADDRESS=0x...
+POLY_API_KEY=your_api_key
+POLY_API_SECRET=your_api_secret
+POLY_PASSPHRASE=your_passphrase
+# Network Configuration
+POLYGON_RPC_URL=https://polygon.drpc.org
+```
+
 ### Chainlink on Polygon (fallback)
 
 - `CHAINLINK_BTC_USD_AGGREGATOR`
