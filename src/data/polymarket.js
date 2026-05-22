@@ -1,4 +1,5 @@
 import { CONFIG } from "../config.js";
+import { fetchChainlinkPriceAtTimestamp } from "./chainlink.js";
 
 /**
  * 将输入转换为数字，如果非有限数字则返回 null
@@ -385,7 +386,8 @@ const marketCache = {
 };
 
 /**
- * 自动解析或根据配置选择当前的 BTC 15分钟市场
+ * 自动解析或根据配置选择当前的 BTC 5分钟/15分钟市场
+ * (通过精确计算时间戳来预测 Slug，彻底解决 Gamma API seriesSlug 过滤器失效的问题)
  */
 export async function resolveCurrentBtc15mMarket() {
   if (CONFIG.polymarket.marketSlug) {
@@ -399,8 +401,20 @@ export async function resolveCurrentBtc15mMarket() {
     return marketCache.market;
   }
 
-  const events = await fetchLiveEventsBySeriesId({ seriesId: CONFIG.polymarket.seriesId, limit: 25 });
-  const markets = flattenEventMarkets(events);
+  const windowMs = CONFIG.candleWindowMinutes * 60_000;
+  const currentWindowStart = Math.floor(now / windowMs) * windowMs;
+  const prefix = CONFIG.candleWindowMinutes === 5 ? "btc-updown-5m-" : "btc-updown-15m-";
+  
+  const currentSlug = `${prefix}${Math.floor(currentWindowStart / 1000)}`;
+  const nextSlug = `${prefix}${Math.floor((currentWindowStart + windowMs) / 1000)}`;
+
+  // 并发获取当前和下一个时间窗口的市场
+  const [currentMarket, nextMarket] = await Promise.all([
+    fetchMarketBySlug(currentSlug),
+    fetchMarketBySlug(nextSlug)
+  ]);
+
+  const markets = [currentMarket, nextMarket].filter(Boolean);
   const picked = pickLatestLiveMarket(markets);
 
   marketCache.market = picked;
@@ -408,11 +422,48 @@ export async function resolveCurrentBtc15mMarket() {
   return picked;
 }
 
+const ethMarketCache = {
+  market: null,
+  fetchedAtMs: 0
+};
+
+/**
+ * 自动解析当前的 ETH 5分钟市场
+ */
+export async function resolveCurrentEthMarket() {
+  if (!CONFIG.polymarket.autoSelectLatest) return null;
+
+  const now = Date.now();
+  if (ethMarketCache.market && now - ethMarketCache.fetchedAtMs < CONFIG.pollIntervalMs) {
+    return ethMarketCache.market;
+  }
+
+  const windowMs = 5 * 60_000; // ETH 是 5m 市场
+  const currentWindowStart = Math.floor(now / windowMs) * windowMs;
+  const prefix = "eth-updown-5m-";
+  
+  const currentSlug = `${prefix}${Math.floor(currentWindowStart / 1000)}`;
+  const nextSlug = `${prefix}${Math.floor((currentWindowStart + windowMs) / 1000)}`;
+
+  // 并发获取当前和下一个时间窗口的市场
+  const [currentMarket, nextMarket] = await Promise.all([
+    fetchMarketBySlug(currentSlug),
+    fetchMarketBySlug(nextSlug)
+  ]);
+
+  const markets = [currentMarket, nextMarket].filter(Boolean);
+  const picked = pickLatestLiveMarket(markets);
+
+  ethMarketCache.market = picked;
+  ethMarketCache.fetchedAtMs = now;
+  return picked;
+}
+
 /**
  * 获取 Polymarket 的市场快照（价格、订单簿、Token ID 等）
  */
-export async function fetchPolymarketSnapshot() {
-  const market = await resolveCurrentBtc15mMarket();
+export async function fetchPolymarketSnapshot(asset = "BTC") {
+  const market = asset === "ETH" ? await resolveCurrentEthMarket() : await resolveCurrentBtc15mMarket();
 
   if (!market) return { ok: false, reason: "market_not_found" };
 
@@ -527,27 +578,16 @@ export function safeFileSlug(s) {
  */
 export async function fetchPtbFromInternalApi(slug) {
   if (!slug) return null;
-  // 从 slug 提取时间戳
+  // 从 slug 提取市场开盘时间戳（秒）
   const match = slug.match(/-(\d{10})$/);
   if (!match) return null;
   
-  const eventStartTime = match[1];
-  let symbol = "BTC";
-  if (slug.includes("eth-")) symbol = "ETH";
+  const startTimeSec = Number(match[1]);
+  const asset = slug.toLowerCase().includes("eth") ? "ETH" : "BTC";
   
-  const url = `https://polymarket.com/api/crypto/crypto-price?symbol=${symbol}&variant=fifteen&eventStartTime=${eventStartTime}`;
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": "curl/8.4.0"
-      }
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Number(data.openPrice);
-  } catch (e) {
-    return null;
-  }
+  // 直接查询 Polygon 链上的 Chainlink 聚合器历史价格
+  // 这和 Polymarket 解析时使用的是完全相同的数据源，PTB 精确到分
+  return await fetchChainlinkPriceAtTimestamp(startTimeSec, asset);
 }
 
 /**
@@ -569,13 +609,10 @@ export async function fetchEventById(id) {
 export async function fetchExactPriceToBeat(slug, conditionId = null) {
   if (!slug) return null;
   
-  // 1. 优先尝试高频最准的内部开盘价接口 (针对 15m 市场)
-  if (slug.includes("-15m-") || slug.includes("btc-updown-15m")) {
-     const internalPtb = await fetchPtbFromInternalApi(slug);
-     if (internalPtb) {
-        console.log(`[DATA] Resolved PTB $${internalPtb} via Internal Price API for ${slug}`);
-        return internalPtb;
-     }
+  // 1. 始终优先尝试内部开盘价接口（同时支持 5m 和 15m）
+  const internalPtb = await fetchPtbFromInternalApi(slug);
+  if (internalPtb) {
+    return internalPtb;
   }
 
   try {

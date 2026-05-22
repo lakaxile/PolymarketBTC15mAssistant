@@ -61,7 +61,10 @@ export function startPolymarketChainlinkPriceStream({
   let lastUpdatedAt = null;
 
   let heartbeatInterval = null;
-  const HEARTBEAT_KEEPALIVE_MS = 15000;
+  // 45 秒无消息才触发重连，避免正常低频行情被误判为断线
+  const HEARTBEAT_KEEPALIVE_MS = 45_000;
+  // 每 20 秒主动发一次 ping 保持连接
+  const PING_INTERVAL_MS = 20_000;
   let lastMessageTime = Date.now();
 
   const connect = () => {
@@ -101,11 +104,19 @@ export function startPolymarketChainlinkPriceStream({
     };
 
     heartbeatInterval = setInterval(() => {
+      if (closed || !ws) return;
+      // 主动 ping 保持连接
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.ping(); } catch { /* ignore */ }
+      }
+      // 超时无消息则重连
       if (Date.now() - lastMessageTime > HEARTBEAT_KEEPALIVE_MS) {
         console.warn(`[DATA] Poly Live WS quiet for ${HEARTBEAT_KEEPALIVE_MS}ms, reconnecting...`);
         scheduleReconnect();
       }
-    }, 5000);
+    }, PING_INTERVAL_MS);
+
+    ws.on("pong", () => { lastMessageTime = Date.now(); });
 
     ws.on("open", () => {
       reconnectMs = 500;

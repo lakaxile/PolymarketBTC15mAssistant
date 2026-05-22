@@ -1,0 +1,16 @@
+[Unit]
+Description=Polymarket BTC Assistant Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=ubuntu
+WorkingDirectory=/home/ubuntu/PolymarketBTC15mAssistant
+ExecStart=/usr/bin/bash /home/ubuntu/PolymarketBTC15mAssistant/start_bot.sh
+ExecStop=/usr/bin/tmux kill-session -t polybot
+RemainAfterExit=yes
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

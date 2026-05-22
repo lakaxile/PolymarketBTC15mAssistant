@@ -6,11 +6,13 @@
   "scripts": {
     "start": "node src/index.js",
     "simulate": "node src/simulate.js",
-    "start-live": "node --expose-gc src/live/trade.js"
+    "start-live": "node --expose-gc --experimental-global-webcrypto src/live/trade.js"
   },
   "dependencies": {
-    "@polymarket/clob-client": "^5.2.4",
+    "@polymarket/clob-client-v2": "^1.0.6",
+    "dotenv": "^17.4.2",
     "ethers": "^6.11.1",
+    "eventsource": "^3.0.7",
     "https-proxy-agent": "^7.0.6",
     "socks-proxy-agent": "^8.0.5",
     "undici": "^6.21.3",

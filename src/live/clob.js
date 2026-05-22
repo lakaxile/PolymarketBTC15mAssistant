@@ -1,10 +1,10 @@
-import { ClobClient } from "@polymarket/clob-client";
+import { ClobClient } from "@polymarket/clob-client-v2";
 import { ethers } from "ethers";
 import { LIVE_CONFIG } from "./config.js";
 
 let _client = null;
 
-// 记录机器人自己下的所有订单 ID，清道夫仅清理这里记录的 ID，不碰用户网页手动挂的单
+// 记录机器人自己下的所有订单 ID，清道夫仅清理这里记录 of ID，不碰用户网页手动挂的单
 export const _botOrderIds = new Set();
 
 export function getClobClient() {
@@ -37,19 +37,19 @@ export function getClobClient() {
     const signatureType = LIVE_CONFIG.proxyAddress ? 2 : 0;
     const funderAddress = LIVE_CONFIG.proxyAddress || undefined;
 
-    // 初始化 CLOB Client
-    _client = new ClobClient(
-        "https://clob.polymarket.com/",
-        137, // Polygon Chain ID
-        signer,
-        LIVE_CONFIG.apiKey ? {
+    // 初始化 CLOB Client (V2 构造参数)
+    _client = new ClobClient({
+        host: "https://clob.polymarket.com/",
+        chain: 137, // Polygon Chain ID
+        signer: signer,
+        creds: LIVE_CONFIG.apiKey ? {
             key: LIVE_CONFIG.apiKey,
             secret: LIVE_CONFIG.apiSecret,
             passphrase: LIVE_CONFIG.apiPassphrase
         } : undefined,
-        signatureType,
-        funderAddress
-    );
+        signatureType: signatureType,
+        funderAddress: funderAddress
+    });
 
     return _client;
 }
@@ -61,8 +61,9 @@ export function getClobClient() {
  * @param {number} price 价格 (美分，例如 0.52)
  * @param {number} size 想要买卖的份额 (Tokens Amount)
  * @param {string} orderType "FOK", "FAK", "GTC", "IOC"
+ * @param {object} options 附加参数（可选，传 tickSize 和 negRisk 以优化延迟）
  */
-export async function placeLimitOrder(tokenId, side, price, size, orderType = "FOK") {
+export async function placeLimitOrder(tokenId, side, price, size, orderType = "FOK", options = {}) {
     const client = getClobClient();
 
     try {
@@ -71,7 +72,7 @@ export async function placeLimitOrder(tokenId, side, price, size, orderType = "F
             price: price,
             side: side.toUpperCase(),
             size: size,
-        });
+        }, options);
 
         // 干跑模式拦截: 不实际向 Polygon 和 CLOB 签名发送交易
         if (LIVE_CONFIG.isDryRun) {

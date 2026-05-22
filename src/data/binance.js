@@ -60,9 +60,9 @@ export async function fetchKlines({ interval, limit }) {
 /**
  * 获取币安指定交易对的最新价格
  */
-export async function fetchLastPrice() {
+export async function fetchLastPrice(symbol = CONFIG.symbol) {
   const url = new URL("/api/v3/ticker/price", CONFIG.binanceBaseUrl);
-  url.searchParams.set("symbol", CONFIG.symbol);
+  url.searchParams.set("symbol", symbol);
 
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), 5000);

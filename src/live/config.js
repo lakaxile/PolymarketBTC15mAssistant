@@ -7,11 +7,20 @@ function loadEnv() {
         const envPath = path.resolve(process.cwd(), ".env");
         if (fs.existsSync(envPath)) {
             const content = fs.readFileSync(envPath, "utf-8");
-            content.split("\n").forEach(line => {
+            content.split("\n").forEach(rawLine => {
+                const line = rawLine.trim();
                 const match = line.match(/^([^#\s][^=]*)=(.*)$/);
                 if (match) {
                     const key = match[1].trim();
-                    const val = match[2].trim();
+                    let val = match[2].trim();
+                    // Strip inline comments
+                    if (val.includes("#")) {
+                        val = val.split("#")[0].trim();
+                    }
+                    // Remove quotes if present
+                    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+                        val = val.slice(1, -1).trim();
+                    }
                     // 仅当值非空时才覆盖，防止 .env 里的空变量覆盖了 shell 里的全局代理
                     if (val) {
                         process.env[key] = val;

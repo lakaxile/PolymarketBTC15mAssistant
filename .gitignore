@@ -4,6 +4,7 @@ node_modules/
 # Environment
 .env
 .env.*
+!.env.example
 .env.local
 
 # Logs
@@ -40,3 +41,6 @@ clob_history.txt
 # Test files
 test_*.js
 debug_*.js
+
+# Custom logs
+error_log.txt

@@ -112,9 +112,15 @@ export class LiveExecutor {
                 await cancelOrdersForToken(tokenID);
             }
 
+            const orderOptions = {};
+            if (orderbook) {
+                if (orderbook.tick_size) orderOptions.tickSize = orderbook.tick_size;
+                if (orderbook.neg_risk !== undefined) orderOptions.negRisk = orderbook.neg_risk;
+            }
+
             const startTime = Date.now();
             // 买入通常使用 FOK (Fill-Or-Kill)，保证要么全买，要么不买
-            const response = await placeLimitOrder(tokenID, "BUY", executionPrice, size, "IOC");
+            const response = await placeLimitOrder(tokenID, "BUY", executionPrice, size, "IOC", orderOptions);
             const duration = ((Date.now() - startTime) / 1000).toFixed(1);
 
             execLog(`[EXEC] Order API responded in ${duration}s`);
@@ -218,10 +224,16 @@ export class LiveExecutor {
                 executionPrice = this.pickBestExecutionPrice(orderbook.topBids, pos.shares, "SELL", currentBid);
             }
 
+            const orderOptions = {};
+            if (orderbook) {
+                if (orderbook.tick_size) orderOptions.tickSize = orderbook.tick_size;
+                if (orderbook.neg_risk !== undefined) orderOptions.negRisk = orderbook.neg_risk;
+            }
+
             execLog(`[EXEC] Submitting IOC Scalp Sell | Strategy: ${strategyType} | TargetPrice: ${currentBid} | ExecPrice: ${executionPrice} | Size: ${sellShares}`);
 
             // 执行卖单：使用 IOC (Immediate-Or-Cancel) 模式，能成交多少是多少，增强成交率
-            const response = await placeLimitOrder(pos.tokenID, "SELL", executionPrice, sellShares, "IOC");
+            const response = await placeLimitOrder(pos.tokenID, "SELL", executionPrice, sellShares, "IOC", orderOptions);
 
             if (response && response.success) {
                 const matchedShares = response.sizeMatched || 0;
@@ -325,9 +337,15 @@ export class LiveExecutor {
                 executionPrice = this.pickBestExecutionPrice(orderbook.topBids, sellShares, "SELL", currentBid);
             }
 
+            const orderOptions = {};
+            if (orderbook) {
+                if (orderbook.tick_size) orderOptions.tickSize = orderbook.tick_size;
+                if (orderbook.neg_risk !== undefined) orderOptions.negRisk = orderbook.neg_risk;
+            }
+
             execLog(`[EXEC] Submitting IOC Partial Sell (${fraction * 100}%) | Strategy: ${strategyType} | TargetPrice: ${currentBid} | ExecPrice: ${executionPrice} | Size: ${sellShares}/${pos.shares}`);
 
-            const response = await placeLimitOrder(pos.tokenID, "SELL", executionPrice, sellShares, "IOC");
+            const response = await placeLimitOrder(pos.tokenID, "SELL", executionPrice, sellShares, "IOC", orderOptions);
 
             if (response && response.success) {
                 const matchedShares = response.sizeMatched || 0;
