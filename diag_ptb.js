@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { fetchExactPriceToBeat, fetchPtbFromInternalApi, resolveCurrentBtc15mMarket } from "./src/data/polymarket.js";
 
 (async () => {

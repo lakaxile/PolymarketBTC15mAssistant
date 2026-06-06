@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Polymarket 实盘下注数据分析面板</title>
+  <!-- Google Fonts: Outfit & Inter for high-end modern typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Load Chart.js from CDN securely -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Custom premium styling stylesheet -->
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+
+  <div class="dashboard-container">
+    
+    <!-- Header Section -->
+    <header class="header">
+      <div class="header-left">
+        <div class="header-title-row">
+          <span class="status-badge-live">实盘</span>
+          <h1 class="header-main-title">链上可验证地址：</h1>
+          <a id="wallet-proxy-link" href="#" target="_blank" class="wallet-pill-link">
+            <span id="wallet-proxy-text">加载中...</span>
+            <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
+          </a>
+        </div>
+        <div class="wallet-sub-row">
+          <span class="wallet-sub-label">EOA主钱包:</span>
+          <span id="wallet-eoa-text" class="wallet-sub-val">加载中...</span>
+        </div>
+      </div>
+      
+      <div class="header-right">
+        <!-- Live status indicator -->
+        <div class="live-indicator-container">
+          <span class="pulsing-green-dot"></span>
+          <span class="live-status-text">动态监控中</span>
+        </div>
+        <div id="date-range-display" class="date-range-display">
+          加载日期范围...
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Navigation / Timeframe Toggle -->
+    <section class="navigation-panel">
+      <div class="timeframe-toggle-group">
+        <button id="toggle-btc5m" class="btn-timeframe active">
+          <span class="tab-main">BTC 5m 实盘</span>
+          <span class="tab-sub">自动读取 orders.jsonl</span>
+        </button>
+        <button id="toggle-eth5m" class="btn-timeframe">
+          <span class="tab-main">ETH 5m 实盘</span>
+          <span class="tab-sub">自动读取 orders.jsonl</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Stat Cards Grid (Exactly like the image structure) -->
+    <section class="stats-grid">
+      
+      <!-- Card 1: 笔数 -->
+      <div class="stat-card">
+        <div class="card-inner">
+          <span class="card-label">笔数</span>
+          <span id="stat-total-trades" class="card-value value-white">0</span>
+        </div>
+      </div>
+
+      <!-- Card 2: 胜率 -->
+      <div class="stat-card">
+        <div class="card-inner">
+          <span class="card-label">胜率</span>
+          <span id="stat-win-rate" class="card-value value-green">0.0%</span>
+        </div>
+      </div>
+
+      <!-- Card 3: 总盈亏 -->
+      <div class="stat-card">
+        <div class="card-inner">
+          <span class="card-label">总盈亏</span>
+          <span id="stat-total-pnl" class="card-value value-green">$0.00</span>
+        </div>
+      </div>
+
+      <!-- Card 4: 盈亏比 PF -->
+      <div class="stat-card">
+        <div class="card-inner">
+          <span class="card-label">盈亏比 PF</span>
+          <span id="stat-profit-factor" class="card-value value-green">0.00</span>
+        </div>
+      </div>
+
+      <!-- Card 5: EV / TRADE -->
+      <div class="stat-card">
+        <div class="card-inner">
+          <span class="card-label">EV / TRADE</span>
+          <span id="stat-ev-trade" class="card-value value-green">$0.0000</span>
+        </div>
+      </div>
+
+      <!-- Card 6: 初始 10U ROI -->
+      <div class="stat-card">
+        <div class="card-inner">
+          <span id="roi-label" class="card-label">初始10U下单额的ROI</span>
+          <span id="stat-roi" class="card-value value-green">0.00%</span>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Filters Section -->
+    <section class="filters-panel">
+      <div class="panel-title">筛选与控制</div>
+      <div class="filters-grid">
+        
+        <!-- Filter 1: Date Range -->
+        <div class="filter-item">
+          <label class="filter-label">记录开始时间 (北京时间)</label>
+          <div class="date-input-wrapper">
+            <input type="date" id="filter-start-date" class="filter-select date-picker" value="2026-05-19">
+            <button id="btn-reset-date" class="btn-secondary" title="重置为5月19号">从5/19起</button>
+            <button id="btn-recent-trade" class="btn-secondary" title="从最新一笔交易起">从最新一单起</button>
+            <button id="btn-all-date" class="btn-secondary" title="查看全部历史记录">查看全部</button>
+          </div>
+        </div>
+
+        <!-- Filter 2: Strategy -->
+        <div class="filter-item">
+          <label class="filter-label">交易策略</label>
+          <select id="filter-strategy" class="filter-select">
+            <option value="ALL">全部策略</option>
+          </select>
+        </div>
+
+        <!-- Filter 3: Side -->
+        <div class="filter-item">
+          <label class="filter-label">预测方向</label>
+          <select id="filter-side" class="filter-select">
+            <option value="ALL">全部 (UP/DOWN)</option>
+            <option value="UP">仅看涨 (UP)</option>
+            <option value="DOWN">仅看跌 (DOWN)</option>
+          </select>
+        </div>
+
+        <!-- Config 1: BTC Amplitude -->
+        <div class="filter-item">
+          <label class="filter-label">BTC 5m 振幅限值 (修改后即时生效)</label>
+          <select id="config-btc-amplitude" class="filter-select">
+            <option value="0.10">0.10%</option>
+            <option value="0.12">0.12%</option>
+            <option value="0.16">0.16%</option>
+            <option value="0.18">0.18%</option>
+          </select>
+        </div>
+
+        <!-- Config 2: ETH Amplitude -->
+        <div class="filter-item">
+          <label class="filter-label">ETH 5m 振幅限值 (修改后即时生效)</label>
+          <select id="config-eth-amplitude" class="filter-select">
+            <option value="0.10">0.10%</option>
+            <option value="0.12">0.12%</option>
+            <option value="0.16">0.16%</option>
+            <option value="0.20">0.20%</option>
+          </select>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- PnL Chart Section -->
+    <section class="chart-section">
+      <div class="chart-header">
+        <h2 class="chart-title">累计 PnL 曲线</h2>
+        <div class="chart-summary-info">
+          <span>当前总盈利: </span>
+          <strong id="chart-pnl-summary" class="text-green">$0.00</strong>
+        </div>
+      </div>
+      <div class="chart-container">
+        <canvas id="pnlChart"></canvas>
+      </div>
+    </section>
+
+    <!-- Trades Detailed Log Table -->
+    <section class="trades-log-section">
+      <div class="table-header">
+        <h2 class="table-title">交易历史明细</h2>
+        <div class="table-actions">
+          <span id="log-count-text" class="log-count-text">共 0 笔交易</span>
+        </div>
+      </div>
+      
+      <div class="table-scroll-container">
+        <table class="trades-table" id="trades-table">
+          <thead>
+            <tr>
+              <th>成交时间</th>
+              <th>市场ID</th>
+              <th>投注问题描述</th>
+              <th>策略名称</th>
+              <th>方向</th>
+              <th>投注额(份)</th>
+              <th>买入价格</th>
+              <th>卖出/结算价</th>
+              <th>成交状态</th>
+              <th>盈亏金额</th>
+            </tr>
+          </thead>
+          <tbody id="trades-table-body">
+            <tr>
+              <td colspan="10" class="table-loading">正在读取链上数据，请稍候...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- Wallet On-Chain Analysis Section                           -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <section class="wallet-analysis-section">
+      <div class="wa-header">
+        <div class="wa-title-row">
+          <span class="wa-icon">🔗</span>
+          <h2 class="wa-title">链上钱包分析</h2>
+          <span class="wa-addr" id="wa-address">0x17de...b7B</span>
+          <span id="wa-loading-badge" class="wa-loading-badge">加载中...</span>
+        </div>
+        <div class="wa-tab-group">
+          <button id="wa-tab-btc" class="wa-tab active">BTC</button>
+          <button id="wa-tab-eth" class="wa-tab">ETH</button>
+        </div>
+      </div>
+
+      <!-- Summary Cards -->
+      <div class="wa-stats-grid" id="wa-stats-grid">
+        <div class="wa-stat-card">
+          <span class="wa-stat-label">总下单笔数</span>
+          <span class="wa-stat-val" id="wa-total">—</span>
+        </div>
+        <div class="wa-stat-card">
+          <span class="wa-stat-label">已结算</span>
+          <span class="wa-stat-val" id="wa-settled">—</span>
+        </div>
+        <div class="wa-stat-card">
+          <span class="wa-stat-label">胜率</span>
+          <span class="wa-stat-val value-green" id="wa-winrate">—</span>
+        </div>
+        <div class="wa-stat-card">
+          <span class="wa-stat-label">胜/负</span>
+          <span class="wa-stat-val" id="wa-wl">—</span>
+        </div>
+        <div class="wa-stat-card">
+          <span class="wa-stat-label">预计盈亏</span>
+          <span class="wa-stat-val" id="wa-pnl">—</span>
+        </div>
+        <div class="wa-stat-card">
+          <span class="wa-stat-label">待结算</span>
+          <span class="wa-stat-val value-yellow" id="wa-unresolved">—</span>
+        </div>
+      </div>
+
+      <!-- Price Breakdown Table -->
+      <div class="wa-table-wrapper">
+        <div class="wa-table-title">各买入价格胜率分析</div>
+        <table class="wa-table" id="wa-price-table">
+          <thead>
+            <tr>
+              <th>买入价格</th>
+              <th>下单笔数</th>
+              <th>胜</th>
+              <th>负</th>
+              <th>胜率</th>
+              <th>投入 USDC</th>
+              <th>胜率条</th>
+            </tr>
+          </thead>
+          <tbody id="wa-price-tbody">
+            <tr><td colspan="7" class="table-loading">正在加载链上数据...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Recent Trades Log -->
+      <div class="wa-table-wrapper" style="margin-top:18px;">
+        <div class="wa-table-title">近期下单记录（最新50笔）</div>
+        <div class="table-scroll-container">
+          <table class="wa-table" id="wa-trades-table">
+            <thead>
+              <tr>
+                <th>时间(UTC)</th>
+                <th>市场</th>
+                <th>方向</th>
+                <th>买入价</th>
+                <th>份数</th>
+                <th>投入</th>
+                <th>结果</th>
+                <th>盈亏</th>
+              </tr>
+            </thead>
+            <tbody id="wa-trades-tbody">
+              <tr><td colspan="8" class="table-loading">正在加载...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Main frontend logic -->
+  <script src="index.js"></script>
+</body>
+</html>

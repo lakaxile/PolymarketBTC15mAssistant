@@ -51,7 +51,16 @@ export async function fetchMarketBySlug(slug) {
 
   const res = await fetchWithRetry(url);
   const data = await res.json();
-  const market = Array.isArray(data) ? data[0] : data;
+  let market = Array.isArray(data) ? data[0] : data;
+  
+  if (!market) {
+    // Fallback: try querying closed markets
+    url.searchParams.set("closed", "true");
+    const resClosed = await fetchWithRetry(url);
+    const dataClosed = await resClosed.json();
+    market = Array.isArray(dataClosed) ? dataClosed[0] : dataClosed;
+  }
+  
   if (!market) return null;
 
   return market;
@@ -609,12 +618,17 @@ export async function fetchEventById(id) {
 export async function fetchExactPriceToBeat(slug, conditionId = null) {
   if (!slug) return null;
   
-  // 1. 始终优先尝试内部开盘价接口（同时支持 5m 和 15m）
-  const internalPtb = await fetchPtbFromInternalApi(slug);
-  if (internalPtb) {
-    return internalPtb;
+  let webPtb = null;
+  let chainlinkPtb = null;
+
+  // 1. 获取链上开盘价
+  try {
+    chainlinkPtb = await fetchPtbFromInternalApi(slug);
+  } catch (e) {
+    console.warn(`[PTB] Failed to fetch on-chain price for ${slug}: ${e.message}`);
   }
 
+  // 2. 获取网页抓包价格
   try {
     const res = await fetchWithRetry(`https://polymarket.com/event/${slug}`, {
       headers: {
@@ -622,56 +636,135 @@ export async function fetchExactPriceToBeat(slug, conditionId = null) {
       }
     });
     
-    const html = await res.text();
-    const match = html.match(/<script id="__NEXT_DATA__" type="application\/json"[^>]*>(.*?)<\/script>/s);
-    if (!match || !match[1]) return null;
-    
-    const data = JSON.parse(match[1]);
-    let exactPtb = null;
-    
-    // 严格匹配目标 slug 的 PTB
-    function searchObj(obj, path = "") {
-      if (!obj || typeof obj !== 'object') return;
-      
-      // 如果对象本身就是目标 event 或者包含目标 event 的关键信息
-      if (obj.slug === slug || (conditionId && obj.conditionId === conditionId)) {
-        const ptbValue = obj.eventMetadata?.priceToBeat || obj.priceToBeat;
-        if (ptbValue) {
-          exactPtb = Number(ptbValue);
-          // console.log(`[DATA] Found PTB ${exactPtb} for ${slug} at ${path}`);
-          return;
+    if (res.ok) {
+      const html = await res.text();
+      const match = html.match(/<script id="__NEXT_DATA__" type="application\/json"[^>]*>(.*?)<\/script>/s);
+      if (match && match[1]) {
+        const data = JSON.parse(match[1]);
+        const queries = data.props?.pageProps?.dehydratedState?.queries || [];
+        
+        const startTimeMatch = slug.match(/-(\d{10})$/);
+        if (startTimeMatch) {
+          const startTimeSec = Number(startTimeMatch[1]);
+          const asset = slug.toLowerCase().includes("eth") ? "ETH" : "BTC";
+          const date = new Date(startTimeSec * 1000);
+          const startIsoWithMs = date.toISOString();
+          const startIsoWithoutMs = startIsoWithMs.replace(".000", "");
+
+          // 1. 尝试从 crypto-prices 历史报价详情查询中直接提取对应时间窗口的 openPrice
+          for (const q of queries) {
+            if (Array.isArray(q.queryKey) && q.queryKey[0] === "crypto-prices") {
+              const qAsset = q.queryKey[2];
+              const qStart = q.queryKey[3];
+              if (String(qAsset).toUpperCase() === asset && 
+                  (qStart === startIsoWithMs || qStart === startIsoWithoutMs)) {
+                const openPrice = Number(q.state?.data?.openPrice);
+                if (Number.isFinite(openPrice)) {
+                  webPtb = openPrice;
+                  // console.log(`[PTB] Extracted exact openPrice $${webPtb} from crypto-prices query for ${slug}`);
+                  break;
+                }
+              }
+            }
+          }
+
+          // 2. 尝试从 past-results 往期结算结果列表查询中提取对应时间窗口的 openPrice/closePrice
+          if (webPtb === null) {
+            for (const q of queries) {
+              if (Array.isArray(q.queryKey) && q.queryKey[0] === "past-results") {
+                const qAsset = q.queryKey[1];
+                if (String(qAsset).toUpperCase() === asset) {
+                  const results = q.state?.data?.data?.results || [];
+                  for (const res of results) {
+                    if (res.startTime === startIsoWithMs || res.startTime === startIsoWithoutMs) {
+                      const openPrice = Number(res.openPrice);
+                      if (Number.isFinite(openPrice)) {
+                        webPtb = openPrice;
+                        // console.log(`[PTB] Extracted openPrice $${webPtb} from past-results query for ${slug}`);
+                        break;
+                      }
+                    }
+                    if (res.endTime === startIsoWithMs || res.endTime === startIsoWithoutMs) {
+                      const closePrice = Number(res.closePrice);
+                      if (Number.isFinite(closePrice)) {
+                        webPtb = closePrice;
+                        // console.log(`[PTB] Extracted closePrice $${webPtb} from past-results query for ${slug}`);
+                        break;
+                      }
+                    }
+                  }
+                }
+              }
+              if (webPtb !== null) break;
+            }
+          }
+        }
+
+        // 3. 兜底方案：如果上述特定价格查询中未找到（例如刚开盘，页面查询尚未生成），则递归搜索匹配目标 slug/conditionId 的对象
+        if (webPtb === null) {
+          const targetSlug = String(slug).toLowerCase();
+          
+          function searchObj(obj, path = "") {
+            if (!obj || typeof obj !== 'object') return;
+            
+            const objSlug = String(obj.slug || "").toLowerCase();
+            const isSlugMatch = objSlug === targetSlug || objSlug.startsWith(targetSlug + "-");
+            const isConditionMatch = conditionId && String(obj.conditionId || "").toLowerCase() === String(conditionId).toLowerCase();
+
+            if (isSlugMatch || isConditionMatch) {
+              const ptbValue = obj.eventMetadata?.priceToBeat || obj.priceToBeat;
+              if (ptbValue) {
+                webPtb = Number(ptbValue);
+                return;
+              }
+            }
+            
+            for (const [k, v] of Object.entries(obj)) {
+              if (webPtb !== null) return;
+              if (v && typeof v === 'object') {
+                searchObj(v, path ? `${path}.${k}` : k);
+              }
+            }
+          }
+          
+          searchObj(data);
+        }
+        
+        // 4. 最后让步：如果仍未找到，且数据中只有一个 event，直接匹配
+        if (webPtb === null) {
+           const firstEvent = data.props?.pageProps?.dehydratedState?.queries?.find(q => q.state?.data?.event)?.state?.data?.event;
+           if (firstEvent && (firstEvent.slug === slug || !slug)) {
+              webPtb = Number(firstEvent.eventMetadata?.priceToBeat || firstEvent.priceToBeat);
+           }
         }
       }
-      
-      // 深度优先遍历
-      for (const [k, v] of Object.entries(obj)) {
-        if (exactPtb) return;
-        if (v && typeof v === 'object') {
-          searchObj(v, path ? `${path}.${k}` : k);
-        }
-      }
     }
-    
-    searchObj(data);
-    
-    // 最后的最后：如果还没找到，且数据里只有一个 event (常见于直接访问 event 页面)，尝试直接取那个
-    if (!exactPtb) {
-       const firstEvent = data.props?.pageProps?.dehydratedState?.queries?.find(q => q.state?.data?.event)?.state?.data?.event;
-       if (firstEvent && (firstEvent.slug === slug || !slug)) {
-          exactPtb = Number(firstEvent.eventMetadata?.priceToBeat || firstEvent.priceToBeat);
-       }
-    }
-
-    if (exactPtb) {
-       console.log(`[DATA] Successfully extracted PTB $${exactPtb} for slug: ${slug}`);
-    } else {
-       console.warn(`[DATA] Could not find PTB in NEXT_DATA for slug: ${slug}`);
-    }
-
-    return Number.isFinite(exactPtb) ? exactPtb : null;
   } catch (e) {
-    console.warn(`[DATA] Failed to reverse-engineer PTB for ${slug}: ${e.message}`);
-    return null;
+    console.warn(`[PTB] Failed to scrape web price for ${slug}: ${e.message}`);
   }
+
+  // 3. 对比并记录价格，优先返回网页价格
+  if (webPtb !== null && chainlinkPtb !== null) {
+    const diff = Math.abs(webPtb - chainlinkPtb);
+    if (diff > 0.000001) {
+      console.warn(`[PTB COMPARE] Mismatch for ${slug}: Web PTB = ${webPtb}, On-Chain = ${chainlinkPtb} (Diff = ${diff}). Prioritizing Web PTB.`);
+    } else {
+      console.log(`[PTB COMPARE] Match for ${slug}: ${webPtb}`);
+    }
+    return webPtb;
+  }
+
+  if (webPtb !== null) {
+    console.log(`[PTB] Only Web PTB available for ${slug}: ${webPtb}`);
+    return webPtb;
+  }
+
+  if (chainlinkPtb !== null) {
+    console.log(`[PTB] Only On-Chain PTB available for ${slug}: ${chainlinkPtb}`);
+    return chainlinkPtb;
+  }
+
+  console.warn(`[PTB] Both Web and On-Chain PTB are unavailable for ${slug}`);
+  return null;
 }
 

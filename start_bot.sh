@@ -28,10 +28,10 @@ echo "🚀 正在后台启动 polybot (tmux session: $SESSION)..."
 # 在后台 tmux 里运行带自动重启的循环
 tmux new-session -d -s "$SESSION" -x 220 -y 50 \
     "cd '$BOT_DIR' && while true; do
-        echo \"[$(date '+%Y-%m-%d %H:%M:%S')] 🟢 启动 node src/index.js\" | tee -a '$LOG_FILE'
-        node src/index.js 2>&1 | tee -a '$LOG_FILE'
+        echo \"[$(date '+%Y-%m-%d %H:%M:%S')] 🟢 启动 node src/index.js\" >> '$LOG_FILE'
+        node src/index.js 2>> '$LOG_FILE'
         EXIT_CODE=\$?
-        echo \"[$(date '+%Y-%m-%d %H:%M:%S')] 🔴 进程退出 (exit code: \$EXIT_CODE)，5秒后重启...\" | tee -a '$LOG_FILE'
+        echo \"[$(date '+%Y-%m-%d %H:%M:%S')] 🔴 进程退出 (exit code: \$EXIT_CODE)，5秒后重启...\" >> '$LOG_FILE'
         sleep 5
     done"
 

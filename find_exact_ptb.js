@@ -1,7 +1,7 @@
 import fs from "fs";
 
 (async () => {
-    const slug = "btc-updown-15m-1774065600";
+    const slug = "btc-updown-5m-1780671600";
     const data = JSON.parse(fs.readFileSync("next_data_dump.json", "utf8"));
     
     let pathFound = null;

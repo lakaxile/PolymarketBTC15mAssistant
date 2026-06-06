@@ -4,12 +4,42 @@
  */
 
 // ─── 策略参数 ─────────────────────────────────────────────────────────────────
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const CONFIG_PATH = path.join(__dirname, '../../logs/strategy_config.json');
+
+function loadPersistedStrategy() {
+  const defaults = {
+    minPriceChangePct: 0.16,
+    minPriceChangePctEth: 0.20,
+  };
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      const content = fs.readFileSync(CONFIG_PATH, 'utf8');
+      const saved = JSON.parse(content);
+      if (typeof saved.minPriceChangePct === 'number') defaults.minPriceChangePct = saved.minPriceChangePct;
+      if (typeof saved.minPriceChangePctEth === 'number') defaults.minPriceChangePctEth = saved.minPriceChangePctEth;
+    }
+  } catch (e) {
+    // Ignore error, use default values
+  }
+  return defaults;
+}
+
+const persisted = loadPersistedStrategy();
+
 export const STRATEGY = {
-  minModelProb: 0.85,    // 最低模型胜率
-  minEdge: 0.10,         // 最低 Edge（模型概率 - ask 价格）
+  minModelProb: 0.80,    // 最低模型胜率 (大于80%)
+  minEdge: 0.10,         // 最低 Edge（模型概率 - ask 价格，大于等于10%）
+  minAskPrice: 0.70,     // 附加条件：下注单价格大于0.7
   minRemSecs: 15,        // 最少剩余秒数（太少来不及成交）
   maxRemSecs: 180,       // 最多剩余秒数（太多不确定性大）
-  minPriceChangePct: 0.09, // 最低 5分钟涨跌幅（%），排除横盘噪音
+  minPriceChangePct: persisted.minPriceChangePct, // 最低 5分钟涨跌幅（%），排除横盘噪音
+  minPriceChangePctEth: persisted.minPriceChangePctEth, // ETH 最低 5分钟涨跌幅（%）
   limitOrderOffset: 0.01, // 挂单价格：比 ask 低多少（争取更好成交价）
   marketOrderMinEdge: 0.15, // 市价单最低 Edge
   marketOrderMaxRemSecs: 45, // 市价单最多剩余秒数（最后时刻才市价）
@@ -47,11 +77,12 @@ export function evaluateSignal(item, priceChangePct = 0) {
   // 剩余时间窗口检查
   if (secs < STRATEGY.minRemSecs || secs > STRATEGY.maxRemSecs) return null;
 
-  // 5 分钟涨跌幅过滤（排除横盘噪音，要求绝对值 >= 0.1%）
-  if (Math.abs(priceChangePct) < STRATEGY.minPriceChangePct) return null;
+  // 5 分钟涨跌幅过滤（排除横盘噪音）
+  const threshold = (symbol === 'ETH') ? STRATEGY.minPriceChangePctEth : STRATEGY.minPriceChangePct;
+  if (Math.abs(priceChangePct) < threshold) return null;
 
   // 检查 UP 方向
-  if (pUp >= STRATEGY.minModelProb && edgeUp >= STRATEGY.minEdge) {
+  if (pUp > STRATEGY.minModelProb && edgeUp >= STRATEGY.minEdge && (up_ask || 1) > STRATEGY.minAskPrice) {
     const isMarketOrder = (
       pUp >= STRATEGY.marketOrderMinProb &&
       edgeUp >= STRATEGY.marketOrderMinEdge &&
@@ -76,7 +107,7 @@ export function evaluateSignal(item, priceChangePct = 0) {
   }
 
   // 检查 DOWN 方向
-  if (pDown >= STRATEGY.minModelProb && edgeDown >= STRATEGY.minEdge) {
+  if (pDown > STRATEGY.minModelProb && edgeDown >= STRATEGY.minEdge && (down_ask || 1) > STRATEGY.minAskPrice) {
     const isMarketOrder = (
       pDown >= STRATEGY.marketOrderMinProb &&
       edgeDown >= STRATEGY.marketOrderMinEdge &&

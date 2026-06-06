@@ -6,6 +6,7 @@ import { ethers } from 'ethers';
 import { Side, OrderType } from '@polymarket/clob-client-v2';
 import fs from 'fs';
 import { getClobClient } from '../live/clob.js';
+import { fetchMarketBySlug } from '../data/polymarket.js';
 
 const DRY_RUN = (process.env.DRY_RUN || 'true').split('#')[0].trim().toLowerCase() !== 'false';
 const rawOrderSize = (process.env.ORDER_SIZE_USDC || '5').split('#')[0].trim();
@@ -58,10 +59,11 @@ export async function executeOrder(signal, marketContext = {}) {
   const { marketTitle = '-', marketSlug = '-', priceToBeat = null, priceChangePct = 0 } = marketContext;
 
   const now = new Date();
+  const currentOrderSize = 15;
 
   // ── DRY RUN 模式 ──────────────────────────────────────────────────────────
   if (DRY_RUN) {
-    const size = Math.max(5, Math.round(ORDER_SIZE_USDC / Number(limitPrice)));
+    const size = Math.max(5, Math.round(currentOrderSize / Number(limitPrice)));
     const price = Number(limitPrice).toFixed(4);
     const entry = {
       ts: now.toISOString(),
@@ -104,7 +106,7 @@ export async function executeOrder(signal, marketContext = {}) {
     const priceFormatted = Number(limitPrice).toFixed(decimalPlaces);
     
     // 计算满足最少 $5.00 USDC 的份额 (避免由于 low price 导致总额低于交易所限制而被拒单)
-    const sizeCalculated = Math.max(5, Math.round(ORDER_SIZE_USDC / Number(priceFormatted)));
+    const sizeCalculated = Math.max(5, Math.round(currentOrderSize / Number(priceFormatted)));
 
     const order = await clobClient.createOrder({
       tokenID: tokenId,
@@ -229,6 +231,68 @@ export async function updatePendingOrderStatus(currentMarketSlugs = null, force 
       lines.map(async (line) => {
         try {
           const entry = JSON.parse(line);
+
+          // 1. 如果订单状态是 FILLED 或 PARTIAL，查询结算结果 (WIN / LOSS)
+          if (entry.status === 'FILLED' || entry.status === 'PARTIAL') {
+            // 防限频保护：订单成交/挂单后 3 分钟内先不查询结果
+            const orderTime = new Date(entry.ts).getTime();
+            if (Date.now() - orderTime < 3 * 60 * 1000) {
+              return line;
+            }
+
+            try {
+              const market = await fetchMarketBySlug(entry.marketSlug, true);
+              if (market && market.closed) {
+                const outcomes = typeof market.outcomes === 'string' ? JSON.parse(market.outcomes) : market.outcomes;
+                const prices = typeof market.outcomePrices === 'string' ? JSON.parse(market.outcomePrices) : market.outcomePrices;
+
+                if (Array.isArray(outcomes) && Array.isArray(prices)) {
+                  const targetOutcome = entry.direction === 'UP' ? 'Up' : 'Down';
+                  const outcomeIndex = outcomes.findIndex(o => o.toLowerCase() === targetOutcome.toLowerCase());
+
+                  if (outcomeIndex !== -1) {
+                    const finalPrice = parseFloat(prices[outcomeIndex]);
+                    // 如果是 PARTIAL，结算份数必须使用实际成交份额 filledShares
+                    const shares = entry.status === 'PARTIAL' ? Number(entry.filledShares || 0) : Number(entry.filledShares || entry.size || 0);
+
+                    // 如果是部分成交，但成交份额为 0，视为未成交 (MISSED) 不进行计算
+                    if (entry.status === 'PARTIAL' && shares === 0) {
+                      entry.status = 'MISSED';
+                      updated = true;
+                      return JSON.stringify(entry);
+                    }
+
+                    if (finalPrice === 1) {
+                      const oldStatus = entry.status;
+                      entry.status = 'WIN';
+                      entry.pnl = (1.0 - entry.price) * shares;
+                      entry.pnlPct = ((1.0 - entry.price) / entry.price) * 100;
+                      updated = true;
+                      console.log(`[EXEC Status Checker] Market resolved (${oldStatus}): ${entry.marketSlug} -> WIN! PnL: +$${entry.pnl.toFixed(2)} (${entry.pnlPct.toFixed(1)}%)`);
+                      return JSON.stringify(entry);
+                    } else if (finalPrice === 0) {
+                      const oldStatus = entry.status;
+                      entry.status = 'LOSS';
+                      entry.pnl = -entry.price * shares;
+                      entry.pnlPct = -100.0;
+                      updated = true;
+                      console.log(`[EXEC Status Checker] Market resolved (${oldStatus}): ${entry.marketSlug} -> LOSS! PnL: -$${Math.abs(entry.pnl).toFixed(2)} (-100%)`);
+                      return JSON.stringify(entry);
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.error(`[EXEC Status Checker] Error fetching resolution for ${entry.marketSlug}:`, err.message);
+            }
+            
+            // 如果是已完全成交 (FILLED) 状态，它是最终状态，直接返回行（无需后续 CLOB 状态轮询）
+            if (entry.status === 'FILLED') {
+              return line;
+            }
+            // 如果是 PARTIAL 但市场还未结算，我们不在这里中断，继续往下走，让 CLOB 接口查询更新成交份额
+          }
+
           // 仅检查 PENDING 或 PARTIAL 的真实订单
           if (entry.status !== 'PENDING' && entry.status !== 'PARTIAL') {
             return line;

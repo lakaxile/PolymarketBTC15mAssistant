@@ -217,10 +217,11 @@ export async function fetchChainlinkPriceAtTimestamp(targetTimestampSec, asset =
       const phaseId = latestRoundId >> PHASE_BITS;
       const latestAggRound = latestRoundId & ((1n << PHASE_BITS) - 1n);
 
-      // 不再基于"每秒1 round"的错误估算来定位窗口
-      // 直接从最新 round 往前推 600 个 round（足以覆盖任何更新频率下的 30 分钟历史）
-      // 二分查找只需约 10 次 RPC 调用
-      let lo = latestAggRound > 600n ? latestAggRound - 600n : 1n;
+      // Polymarket PTB 定义：市场开盘时刻（targetTimestampSec）后或正好在开盘时刻的第一个 Chainlink 价格更新
+      // 即：寻找满足 updatedAt >= targetTimestampSec 的最小 round
+      const diffSec = latestTs - targetTimestampSec;
+      const lookbackRounds = BigInt(Math.max(600, Math.ceil(diffSec / 10) * 2));
+      let lo = latestAggRound > lookbackRounds ? latestAggRound - lookbackRounds : 1n;
       let hi = latestAggRound;
       let resultPrice = null;
       let resultRound = null;
@@ -232,7 +233,7 @@ export async function fetchChainlinkPriceAtTimestamp(targetTimestampSec, asset =
           const round = await fetchRoundDataById(rpc, aggregator, roundId);
           const ts = Number(round.updatedAt);
           if (ts > 0 && ts >= targetTimestampSec) {
-            // 找到一个 >= target 的 round，记录并继续向左缩小找更早的
+            // 找到一个 >= target 的 round，记录并往左边继续寻找更早的 round（即寻找满足条件的最早 round）
             resultPrice = Number(round.answer) / scale;
             resultRound = mid;
             hi = mid - 1n;
@@ -240,7 +241,7 @@ export async function fetchChainlinkPriceAtTimestamp(targetTimestampSec, asset =
             lo = mid + 1n;
           }
         } catch {
-          lo = mid + 1n;
+          hi = mid - 1n;
         }
       }
 

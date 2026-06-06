@@ -17,6 +17,8 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { applyGlobalProxyFromEnv } from "./net/proxy.js";
+import { startApiServer } from "./net/apiServer.js";
+import { startDashboardServer } from "./dashboard/server.js";
 
 // 应用环境变量中的代理设置
 applyGlobalProxyFromEnv();
@@ -287,6 +289,8 @@ async function main() {
   const chainlinkStream = startChainlinkPriceStream({});
   const chainlinkStreamEth = startChainlinkPriceStream({ aggregator: CONFIG.chainlink.ethUsdAggregator, decimals: 8 });
   startMarsedgeStream();
+  startApiServer();
+  startDashboardServer();
 
   let prevSpotPrice = null;
   let prevSpotPriceEth = null;
@@ -431,15 +435,22 @@ async function main() {
       updatePendingOrderStatus({ BTC: marketSlug, ETH: ethMarketSlug }).catch(() => {});
 
       // When BTC market changes, trigger a fresh PTB fetch
+      const marketStartTimeMatch = marketSlug ? marketSlug.match(/-(\d{10})$/) : null;
+      const marketStartTimeMs = marketStartTimeMatch ? Number(marketStartTimeMatch[1]) * 1000 : 0;
+      const isBtcMarketJustStarted = marketStartTimeMs > 0 && (Date.now() - marketStartTimeMs < 90000);
+
       if (marketSlug && priceToBeatState.slug !== marketSlug) {
-        priceToBeatState = { slug: marketSlug, value: null, fetching: false };
+        priceToBeatState = { slug: marketSlug, value: null, fetching: false, lastFetchMs: 0 };
       }
 
-      if (priceToBeatState.slug && priceToBeatState.value === null && !priceToBeatState.fetching) {
+      const needsBtcRefresh = priceToBeatState.value === null || (isBtcMarketJustStarted && Date.now() - (priceToBeatState.lastFetchMs || 0) > 10000);
+
+      if (priceToBeatState.slug && needsBtcRefresh && !priceToBeatState.fetching) {
         priceToBeatState.fetching = true;
-        fetchExactPriceToBeat(priceToBeatState.slug).then((ptb) => {
+        fetchExactPriceToBeat(priceToBeatState.slug, poly.market?.conditionId).then((ptb) => {
           if (ptb && priceToBeatState.slug === marketSlug) {
             priceToBeatState.value = ptb;
+            priceToBeatState.lastFetchMs = Date.now();
           }
           priceToBeatState.fetching = false;
         }).catch(() => { priceToBeatState.fetching = false; });
@@ -448,15 +459,22 @@ async function main() {
       const priceToBeat = priceToBeatState.slug === marketSlug ? priceToBeatState.value : null;
 
       // When ETH market changes, trigger a fresh PTB fetch
+      const ethMarketStartTimeMatch = ethMarketSlug ? ethMarketSlug.match(/-(\d{10})$/) : null;
+      const ethMarketStartTimeMs = ethMarketStartTimeMatch ? Number(ethMarketStartTimeMatch[1]) * 1000 : 0;
+      const isEthMarketJustStarted = ethMarketStartTimeMs > 0 && (Date.now() - ethMarketStartTimeMs < 90000);
+
       if (ethMarketSlug && priceToBeatStateEth.slug !== ethMarketSlug) {
-        priceToBeatStateEth = { slug: ethMarketSlug, value: null, fetching: false };
+        priceToBeatStateEth = { slug: ethMarketSlug, value: null, fetching: false, lastFetchMs: 0 };
       }
 
-      if (priceToBeatStateEth.slug && priceToBeatStateEth.value === null && !priceToBeatStateEth.fetching) {
+      const needsEthRefresh = priceToBeatStateEth.value === null || (isEthMarketJustStarted && Date.now() - (priceToBeatStateEth.lastFetchMs || 0) > 10000);
+
+      if (priceToBeatStateEth.slug && needsEthRefresh && !priceToBeatStateEth.fetching) {
         priceToBeatStateEth.fetching = true;
-        fetchExactPriceToBeat(priceToBeatStateEth.slug).then((ptb) => {
+        fetchExactPriceToBeat(priceToBeatStateEth.slug, polyEth.market?.conditionId).then((ptb) => {
           if (ptb && priceToBeatStateEth.slug === ethMarketSlug) {
             priceToBeatStateEth.value = ptb;
+            priceToBeatStateEth.lastFetchMs = Date.now();
           }
           priceToBeatStateEth.fetching = false;
         }).catch(() => { priceToBeatStateEth.fetching = false; });
@@ -599,8 +617,8 @@ async function main() {
              alertMsgEth += ` [ALREADY ORDERED]`;
           }
         } else if (predictionEth.data.p_up_pct >= 85 || predictionEth.data.p_down_pct >= 85) {
-           if (priceChangePctEth < STRATEGY.minPriceChangePct) {
-              alertMsgEth = `⚠️ [ETH SIGNAL FILTERED] 涨跌幅不足 ${STRATEGY.minPriceChangePct}% (${priceChangePctEth.toFixed(3)}%), 防御横盘震荡`;
+           if (priceChangePctEth < STRATEGY.minPriceChangePctEth) {
+              alertMsgEth = `⚠️ [ETH SIGNAL FILTERED] 涨跌幅不足 ${STRATEGY.minPriceChangePctEth}% (${priceChangePctEth.toFixed(3)}%), 防御横盘震荡`;
            } else if (predictionEth.data.rem_secs < STRATEGY.minRemSecs || predictionEth.data.rem_secs > STRATEGY.maxRemSecs) {
               alertMsgEth = `⚠️ [ETH SIGNAL FILTERED] 时间窗口不符合 (剩余 ${predictionEth.data.rem_secs}s)`;
            }
@@ -720,11 +738,18 @@ async function main() {
             const dir = o.direction === 'UP'
               ? `${ANSI.green}▲UP${ANSI.reset}`
               : `${ANSI.red}▼DN${ANSI.reset}`;
-            const statusColor = o.status === 'FILLED' ? ANSI.green
-              : o.status === 'MISSED' ? ANSI.red
-              : o.status === 'SIMULATED' ? ANSI.gray
-              : ANSI.yellow;
-            const statusStr = `${statusColor}${(o.status || '?').padEnd(9)}${ANSI.reset}`;
+            let statusStr = '';
+            if (o.status === 'WIN') {
+              statusStr = `${ANSI.green}WIN (+$${(o.pnl || 0).toFixed(2)})${ANSI.reset}`;
+            } else if (o.status === 'LOSS') {
+              statusStr = `${ANSI.red}LOSS (-$${Math.abs(o.pnl || 0).toFixed(2)})${ANSI.reset}`;
+            } else {
+              const statusColor = o.status === 'FILLED' ? ANSI.green
+                : o.status === 'MISSED' ? ANSI.red
+                : o.status === 'SIMULATED' ? ANSI.gray
+                : ANSI.yellow;
+              statusStr = `${statusColor}${(o.status || '?').padEnd(9)}${ANSI.reset}`;
+            }
             return `  ${t}  ${sym}  ${period.padEnd(15)}  ${dir}  ` +
               `胜率${String(o.modelProb).padStart(4)}%  ` +
               `Edge+${String(o.edge).padStart(4)}%  ` +

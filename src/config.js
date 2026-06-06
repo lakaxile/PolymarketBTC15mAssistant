@@ -40,6 +40,15 @@ export const CONFIG = {
 
   marsedge: {
     apiKey: process.env.MARSEDGE_API_KEY || "" // MarsEdge SSE API 密钥
+  },
+
+  apiServer: {
+    enabled: (process.env.API_SERVER_ENABLED || "true").toLowerCase() === "true", // 是否启用分发 API 服务器
+    port: Number(process.env.API_SERVER_PORT || "3000") || 3000, // 分发服务器监听端口
+    allowedTokens: (process.env.API_SERVER_TOKENS || "default_token_123,friend_token_abc")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean) // 允许访问的子 Token 列表
   }
 };
 

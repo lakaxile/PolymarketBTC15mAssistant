@@ -8,6 +8,9 @@ let latestMarsedgeData = {
   error: null
 };
 
+let marsedgeHistory = [];
+const HISTORY_LIMIT_MS = 15 * 60 * 1000; // retain up to 15 mins by default
+
 let abortController = null;
 
 export function startMarsedgeStream() {
@@ -64,7 +67,20 @@ export function startMarsedgeStream() {
                 const data = JSON.parse(dataStr);
                 if (data.items) {
                    latestMarsedgeData.items = data.items;
-                   latestMarsedgeData.updatedAt = Date.now();
+                   const now = Date.now();
+                   latestMarsedgeData.updatedAt = now;
+                   
+                   // Record to history buffer
+                   marsedgeHistory.push({
+                       timestamp: now,
+                       items: data.items
+                   });
+                   
+                   // Auto prune old data to prevent memory leak
+                   const cutoff = now - HISTORY_LIMIT_MS;
+                   while (marsedgeHistory.length > 0 && marsedgeHistory[0].timestamp < cutoff) {
+                       marsedgeHistory.shift();
+                   }
                 }
               } catch (e) {
                 // ignore parse error
@@ -100,4 +116,52 @@ export function getMarsedgePrediction(symbol = "BTC") {
     ok: true,
     data: item
   };
+}
+
+export function getMarsedgePredictionAtTime(symbol = "BTC", targetTimestampSec) {
+  const targetTimeMs = targetTimestampSec * 1000;
+  
+  if (marsedgeHistory.length === 0) {
+     return getMarsedgePrediction(symbol); // fallback to latest if no history
+  }
+
+  // Only use records at or before the trade timestamp (no future data)
+  const validRecords = marsedgeHistory.filter(r => r.timestamp <= targetTimeMs);
+
+  let closestRecord;
+  if (validRecords.length > 0) {
+    // Pick the most recent past record
+    closestRecord = validRecords.reduce((best, r) =>
+      r.timestamp > best.timestamp ? r : best, validRecords[0]);
+  } else {
+    // No past records available, fallback to oldest
+    closestRecord = marsedgeHistory.reduce((oldest, r) =>
+      r.timestamp < oldest.timestamp ? r : oldest, marsedgeHistory[0]);
+    console.warn('[getMarsedgePredictionAtTime] No past record found, using oldest as fallback');
+  }
+
+  const item = closestRecord.items.find(i => i.symbol === symbol);
+  if (!item) {
+    return { error: `No data for ${symbol} at the given time` };
+  }
+  
+  return {
+    ok: true,
+    data: item,
+    recordTimestamp: closestRecord.timestamp,
+    timeDiffSec: (closestRecord.timestamp - targetTimeMs) / 1000
+  };
+}
+
+export function clearMarsedgeHistoryBefore(timestampSec) {
+  if (!timestampSec) {
+      marsedgeHistory = [];
+      return;
+  }
+  const targetMs = timestampSec * 1000;
+  marsedgeHistory = marsedgeHistory.filter(h => h.timestamp > targetMs);
+}
+
+export function getMarsedgeState() {
+  return latestMarsedgeData;
 }
